@@ -280,7 +280,9 @@ function node_to_trace(
     choicemap_node = Gen.choicemap()
     Gen.set_submap!(choicemap_node, :tree, node_to_choicemap(node, config))
     constraints = merge(choicemap_node, choicemap_obs)
-    constraints[:noise] = Model.untransform_param(:noise, noise, config)
+    # The model adds Model.JITTER to the transformed noise, and `noise` is the
+    # value after that addition, so remove it before inverting the transform.
+    constraints[:noise] = Model.untransform_param(:noise, noise - Model.JITTER, config)
     constraints[:xs] = xs
     return Gen.generate(Model.model, (ts, config), constraints)[1]
 end

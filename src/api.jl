@@ -461,7 +461,7 @@ function remove_data!(model::GPModel, ds::IndexType)
     # Prepare observations.
     observations = Gen.choicemap((:xs, y_numeric))
     if !isnothing(model.config.noise)
-        observations[:noise] = Model.untransform_param(:noise, config.noise, model.config)
+        observations[:noise] = Model.untransform_param(:noise, model.config.noise, model.config)
     end
     # Run SMC step.
     Inference.smc_step!(model.pf_state, (ds_numeric, model.config), observations)
