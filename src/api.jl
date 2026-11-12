@@ -70,7 +70,12 @@ A `GPModel` contains covariance kernel structures and parameters for modeling da
         ds::IndexType,
         y::Vector{<:Real};
         n_particles::Integer=8,
-        config::GP.GPConfig=GP.GPConfig())
+        config::GP.GPConfig=GP.GPConfig(),
+        y_transform::Union{Nothing,Transforms.LinearTransform}=nothing)
+
+If `y_transform` is `nothing` (default), the observations are centered and
+scaled; otherwise the given transformation is used, e.g.,
+`Transforms.LinearTransform(1., 0.)` leaves the observations unchanged.
 
 # See also
 
@@ -93,10 +98,13 @@ function GPModel(
         ds::IndexType,
         y::Vector{<:Real};
         n_particles::Integer=Threads.nthreads(),
-        config::GP.GPConfig=GP.GPConfig())
+        config::GP.GPConfig=GP.GPConfig(),
+        y_transform::Union{Nothing,Transforms.LinearTransform}=nothing)
     # Save the transformations.
     ds_transform = Transforms.LinearTransform(to_numeric.(ds), 0, 1)
-    y_transform = Transforms.LinearTransform(Vector{Float64}(y), 1)
+    if isnothing(y_transform)
+        y_transform = Transforms.LinearTransform(Vector{Float64}(y), 1)
+    end
     # Transform the data.
     ds_numeric = Transforms.apply(ds_transform, to_numeric.(ds))
     y_numeric = Transforms.apply(y_transform, y)
@@ -109,6 +117,13 @@ function GPModel(
         Model.model, (ds_numeric, config), observations, n_particles)
     # Return the state.
     return GPModel(pf_state, config, collect(ds), collect(y), ds_transform, y_transform)
+end
+
+# Error for functions that assume i.i.d. Gaussian observation noise.
+function assert_gaussian_observation_model(model::GPModel, name::String)
+    isnothing(model.config.observation_model) || error(
+        "AutoGP.$(name) requires Gaussian observation noise, " *
+        "but model.config.observation_model is set.")
 end
 
 """
@@ -160,6 +175,10 @@ If `reparameterize` is `true` (default), then the kernel parameters are
 given in the original data space (more interpretable); otherwise they are
 given in the transformed space over which parameter inference is performed
 (useful for debugging).
+
+If `model.config.observation_model` is set, then with `reparameterize=false`
+the returned values are the scalar noise parameters given to that
+observation model.
 """
 function observation_noise_variances(model::GPModel; reparameterize::Bool=true)
     noises = [t[:noise] for t in model.pf_state.traces]
@@ -331,6 +350,7 @@ function fit_greedy!(
         check::Bool=false,
         callback_fn::Function=(; kwargs...) -> nothing)
     # Error checking.
+    assert_gaussian_observation_model(model, "fit_greedy!")
     (num_particles(model) == 1) || error("AutoGP.fit_greedy! requires exactly 1 particle.")
     !model.config.changepoints || error("AutoGP.fit_greedy! does not support changepoint operators.")
     (1 <= max_depth <= (model.config.max_depth == -1 ? Inf : model.config.max_depth)) || error("AutoGP.fit_greedy! requires positive and finite max_depth.")
@@ -498,6 +518,7 @@ function predict_mvn(
         model::GPModel,
         ds::IndexType;
         noise_pred::Union{Nothing,Float64}=nothing)
+    assert_gaussian_observation_model(model, "predict_mvn")
     if !(eltype(ds) <: eltype(model.ds))
         error("Invalid time $(ds), expected $(eltype(model.ds))")
     end
@@ -635,6 +656,7 @@ function predict(
         ds::IndexType;
         quantiles::Vector{Float64}=Float64[],
         noise_pred::Union{Nothing,Float64}=nothing)
+    assert_gaussian_observation_model(model, "predict")
     if !(eltype(ds) <: eltype(model.ds))
         error("Invalid time $(ds), expected $(eltype(model.ds))")
     end
@@ -729,6 +751,7 @@ series structures that make up each particle of `model`.
 - [Time Series Decomposition Tutorial](./tutorials/decomposition.html)
 """
 function decompose(model::GPModel)
+    assert_gaussian_observation_model(model, "decompose")
     kernels = covariance_kernels(model; reparameterize=false)
     unrolled = map(GP.unroll, kernels)
     @assert length(kernels) == num_particles(model)
@@ -795,6 +818,7 @@ retained.
 - [Time Series Decomposition Tutorial](./tutorials/decomposition.html)
 """
 function extract_kernel(model::GPModel, t::Type{T}; retain::Bool=true) where T <: GP.LeafNode
+    assert_gaussian_observation_model(model, "extract_kernel")
     kernels = covariance_kernels(model; reparameterize=false)
     new_kernels = [GP.extract_kernel(kernel, t; retain=retain) for kernel in kernels]
     # TODO: Should we use zero noise or current noise?
@@ -822,6 +846,7 @@ kernels.
 - [Time Series Decomposition Tutorial](./tutorials/decomposition.html)
 """
 function split_kernel_sop(model::GPModel, ::Type{T}) where {T <: GP.LeafNode}
+    assert_gaussian_observation_model(model, "split_kernel_sop")
     kernels = covariance_kernels(model; reparameterize=false)
     split_kernels = [GP.split_kernel_sop(kernel, T) for kernel in kernels]
     split_kernels_a, split_kernels_b = zip(split_kernels...)
@@ -980,6 +1005,7 @@ function predict_mvn_sum(
         ds::IndexType,
         ::Type{T};
         noise_pred::Union{Nothing,Float64}=nothing) where {T <: GP.LeafNode}
+    assert_gaussian_observation_model(model, "predict_mvn_sum")
     # Transform the data.
     ts = Transforms.apply(model.ds_transform, to_numeric.(model.ds))
     xs = Transforms.apply(model.y_transform, to_numeric.(model.y))
