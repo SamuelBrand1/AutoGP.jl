@@ -1095,6 +1095,39 @@ an instance of [`Node`](@ref). The main `kwargs` (all optional) are:
 
 - `noise::Union{Nothing,Float64}`: Whether to use a fixed observation
   noise; default is `nothing` to infer automatically.
+
+- `observation_model::Union{Nothing,Gen.Distribution{Vector{Float64}}}`:
+  Distribution of the observations given the kernel; default is `nothing`
+  for i.i.d. Gaussian observation noise, i.e., `mvnormal(0, K + noise*I)`.
+  See below.
+
+# Custom observation models
+
+If `observation_model` is set to a `Gen.Distribution{Vector{Float64}}`
+instance `dist`, the observations are modeled as `xs ~ dist(K, noise)`,
+where `K` is the noise-free covariance matrix of the kernel at the observed
+time points and `noise` is the positive scalar noise parameter. The
+distribution decides how `noise` is used. All inference (`fit_smc!`,
+`fit_mcmc!`, `mcmc_structure!`, `mcmc_parameters!`, `add_data!`,
+`remove_data!`) operates through the log density of `dist`. Functions that
+assume Gaussian observation noise (prediction, decomposition, greedy
+search) raise an error; predictions must be computed by the caller from
+[`AutoGP.covariance_kernels`](@ref) and
+[`AutoGP.observation_noise_variances`](@ref) with `reparameterize=false`.
+
+The distribution `dist` must satisfy the following requirements.
+
+- `Gen.logpdf(dist, xs, K, noise)` returns a finite value for all valid
+  inputs and never throws. It returns `0.0` when `xs` is empty.
+
+- `Gen.logpdf_grad(dist, xs, K, noise)` returns `(nothing, dK, dnoise)`
+  where `dK` is a dense matrix that treats all entries of `K` as
+  independent (the convention of `Gen.mvnormal`) and `dnoise` is a scalar,
+  with `Gen.has_output_grad(dist) = false` and
+  `Gen.has_argument_grads(dist) = (true, true)`.
+
+- `Gen.random(dist, K, noise)` returns `Float64[]` when `K` is empty,
+  because inference is initialized with no observations.
 """
 @with_kw struct GPConfig
     # Assignment of integer code to each node type.
@@ -1129,6 +1162,8 @@ an instance of [`Node`](@ref). The main `kwargs` (all optional) are:
     changepoints::Bool = true
     # Observation noise level.
     noise::Union{Nothing,Float64} = nothing
+    # Observation model, nothing for i.i.d. Gaussian observation noise.
+    observation_model::Union{Nothing,Gen.Distribution{Vector{Float64}}} = nothing
     # Parameter customization.
     prior::Dict{Any,Any} = Dict(
         :gamma      => Dict(:scale=>2., :mu=>0., :sigma=>1.),

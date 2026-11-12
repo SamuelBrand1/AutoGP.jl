@@ -21,4 +21,6 @@ using AutoGP
     @testset "test_api.jl"                begin include("test_api.jl") end
     @testset "test_serialize.jl"          begin include("test_serialize.jl") end
     @testset "test_extensible_config.jl"  begin include("test_extensible_config.jl") end
+    @testset "test_fixed_noise.jl"        begin include("test_fixed_noise.jl") end
+    @testset "test_observation_model.jl"  begin include("test_observation_model.jl") end
 end

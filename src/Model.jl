@@ -125,8 +125,14 @@ end
     covariance_fn = {:tree} ~ covariance_prior(1, config)
     noise ~ normal(0, 1)
     noise = transform_param(:noise, noise, config) + JITTER
-    cov_matrix = GP.compute_cov_matrix_vectorized(covariance_fn, noise, ts)
-    xs ~ mvnormal(zeros(n), cov_matrix)
+    if isnothing(config.observation_model)
+        cov_matrix = GP.compute_cov_matrix_vectorized(covariance_fn, noise, ts)
+        xs ~ mvnormal(zeros(n), cov_matrix)
+    else
+        # Custom observation model receives the noise-free covariance.
+        cov_matrix = GP.eval_cov(covariance_fn, ts)
+        xs ~ config.observation_model(cov_matrix, noise)
+    end
     return covariance_fn
 end
 
