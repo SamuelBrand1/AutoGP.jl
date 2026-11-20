@@ -56,6 +56,22 @@ end
 
 const MAX_OPT=10
 
+# Gen.map_optimize, retried from a smaller initial step size whenever a step
+# diverges.
+function map_optimize(trace, selection;
+        max_step_size=0.1, min_step_size=1e-16, kwargs...)
+    while max_step_size >= min_step_size
+        try
+            return Gen.map_optimize(trace, selection;
+                max_step_size=max_step_size, min_step_size=min_step_size, kwargs...)
+        catch err
+            err isa Inference.DivergenceError || rethrow()
+            max_step_size /= 2
+        end
+    end
+    return trace
+end
+
 function greedy_mcmc_rejuvenate(
         trace::Gen.Trace,
         aic::Float64,
@@ -92,7 +108,7 @@ function greedy_mcmc_rejuvenate(
     selection = Gen.select(leaf_addrs...)
     prev_score = Gen.get_score(trace_prop)
     for i=1:MAX_OPT
-        trace_prop = Gen.map_optimize(trace_prop, selection; verbose=verbose)
+        trace_prop = map_optimize(trace_prop, selection; verbose=verbose)
         new_score = Gen.get_score(trace_prop)
         @match (new_score == prev_score) begin
                 true  => (break)
@@ -367,7 +383,7 @@ function update_and_optimize_structure(
     selection = Gen.select(leaf_addrs...)
     prev_score = Gen.get_score(trace_prop)
     for i=1:MAX_OPT
-        trace_prop = Gen.map_optimize(trace_prop, selection)
+        trace_prop = map_optimize(trace_prop, selection)
         new_score = Gen.get_score(trace_prop)
         @assert prev_score <= new_score
         @match (new_score == prev_score) begin

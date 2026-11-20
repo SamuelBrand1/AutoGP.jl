@@ -15,6 +15,7 @@
 # included by ./Inference.jl
 
 import Distributions
+import LinearAlgebra
 
 using Printf: @sprintf
 
@@ -29,6 +30,11 @@ function effective_sample_size(state::Gen.ParticleFilterState)
     log_normalized_weights = Gen.normalize_weights(state.log_weights)[2]
     return Gen.effective_sample_size(log_normalized_weights)
 end
+
+# Errors raised when a gradient step reaches parameters at which the
+# covariance matrix cannot be constructed, evaluated or factorized.
+const DivergenceError = Union{
+    LinearAlgebra.PosDefException,DomainError,AssertionError}
 
 function rejuvenate_particle_parameters(
         trace::Gen.Trace,
@@ -60,8 +66,14 @@ function rejuvenate_particle_parameters(
     @assert length(leaf_addrs) > 0
     selection = Gen.select(leaf_addrs...)
     for i=1:n_hmc
-        trace, accepted = Gen.hmc(trace, selection;
-            L=L_param, eps=eps_param, check=check, observations=observations)
+        # A trajectory that diverges is rejected.
+        trace, accepted = try
+            Gen.hmc(trace, selection;
+                L=L_param, eps=eps_param, check=check, observations=observations)
+        catch err
+            err isa DivergenceError || rethrow()
+            (trace, false)
+        end
         if infer_noise
             trace, = Gen.hmc(trace, Gen.select(:noise);
                 L=L_noise, eps=eps_noise, check=check, observations=observations)
