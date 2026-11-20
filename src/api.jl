@@ -199,7 +199,9 @@ the observed data. Inference is performed using sequential Monte Carlo.
 - `adaptive_resampling::Bool=true`: If `true` resamples based on ESS threshold, else at each step.
 - `adaptive_rejuvenation::Bool=false`: If `true` rejuvenates only if resampled, else at each step.
 - `hmc_config::Dict`: Configuration for HMC inference on numeric parameters. Allowable keys are:
-    - `n_exit::Integer=1`: Number of successive rejections after which HMC loop is terminated.
+    - `n_exit::Integer=n_hmc`: Number of successive rejections after which HMC loop is terminated.
+      The default never terminates early; a smaller value saves time but the sampler then no
+      longer leaves the posterior invariant, because the number of steps depends on the samples.
     - `L_param::Integer=10` Number of leapfrog steps for kernel parameters.
     - `L_noise::Integer=10`: Number of leapfrog steps for noise parameter.
     - `eps_param::Float64=0.02`: Step size for kernel parameters.
@@ -218,7 +220,7 @@ function fit_smc!(
         shuffle::Bool=true,
         adaptive_resampling::Bool=true,
         adaptive_rejuvenation::Bool=false,
-        hmc_config=(n_exit=1,),
+        hmc_config=Dict(),
         verbose::Bool=false,
         check::Bool=false,
         callback_fn::Function=(; kwargs...) -> nothing)
@@ -281,7 +283,7 @@ function fit_mcmc!(
         model::GPModel;
         n_mcmc::Integer,
         n_hmc::Integer,
-        hmc_config=(n_exit=2,),
+        hmc_config=Dict(),
         biased::Bool=false,
         verbose::Bool=false,
         check::Bool=false,
@@ -404,7 +406,7 @@ function mcmc_structure!(
         model::GPModel,
         n_mcmc::Integer,
         n_hmc::Integer;
-        hmc_config=(n_exit=2,),
+        hmc_config=Dict(),
         biased::Bool=false,
         verbose::Bool=false,
         check::Bool=false)
