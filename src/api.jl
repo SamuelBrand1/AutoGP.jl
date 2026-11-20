@@ -205,11 +205,15 @@ the observed data. Inference is performed using sequential Monte Carlo.
       early, and is the default whenever `hmc_config` is given without `n_exit`.
     - `L_param::Integer=10` Number of leapfrog steps for kernel parameters.
     - `L_noise::Integer=10`: Number of leapfrog steps for noise parameter.
-    - `eps_param::Float64=0.02`: Step size for kernel parameters.
+    - `eps_param::Float64=0.02`: Step size for kernel parameters (default `0.1` with a metric).
     - `eps_noise::Float64=0.02`: Step size for noise parameter.
-
-  The leapfrog steps for kernel parameters follow their prior only, and the proposal is accepted
-  on the posterior; noise is moved separately by HMC.
+    - `metric_draws::Integer=0`: By default (`0`) the leapfrog steps for kernel parameters follow
+      their prior only, and the proposal is accepted on the posterior; noise is moved separately
+      by HMC. If positive, kernel parameters and noise are moved jointly by HMC on the posterior,
+      using `L_param` and `eps_param`, with a diagonal metric that reflects the typical scale of
+      each parameter for the current covariance structure. The metric is estimated from this many
+      draws from the prior; it does not depend on the current parameter values. Needs Gen after
+      0.4.9.
 - `verbose::Bool=false`: Report progress to stdout.
 - `check::Bool=false`: Perform dynamic correctness checks during inference.
 - `config::GP.GPConfig=GP.GPConfig()`: User-specific customization, refer to [`GP.GPConfig`](@ref).
