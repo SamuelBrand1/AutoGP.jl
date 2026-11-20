@@ -20,6 +20,42 @@ using AutoGP: GP
 using AutoGP: Inference
 using AutoGP.Model: Gen
 
+@testset "default move for kernel parameters" begin
+
+  config = GP.GPConfig()
+  n = 40
+  ts = collect(range(0, 1, length=n))
+  Random.seed!(1)
+  xs = sin.(2pi .* ts ./ 0.1) .+ 0.1 .* randn(n)
+  trace = Inference.node_to_trace(
+    GP.Linear(0.1, 1.3, 0.7) + GP.GammaExponential(0.3, 1.2, 1.0), config, ts, xs, 0.1)
+  addresses = filter(!=(:noise), Inference.get_gp_parameter_addresses(trace))
+  selection = Gen.select(addresses...)
+  values = Gen.to_array(Gen.get_selected(Gen.get_choices(trace), selection), Float64)
+  (L, eps) = (10, 0.02)
+
+  for seed in 1:20
+    # Replay the momenta, then follow the leapfrog steps of the prior, whose
+    # gradient is minus the values.
+    Random.seed!(seed)
+    momenta = Float64[Gen.random(Gen.normal, 0, 1) for _ in values]
+    expected = copy(values)
+    for _ in 1:L
+      momenta += (eps / 2) * (-expected)
+      expected += eps * momenta
+      momenta += (eps / 2) * (-expected)
+    end
+
+    Random.seed!(seed)
+    (new_trace, accepted) = Inference.prior_hmc(trace, selection; L=L, eps=eps)
+    proposed = Gen.to_array(Gen.get_selected(Gen.get_choices(new_trace), selection), Float64)
+    @test proposed == (accepted ? expected : values)
+    @test new_trace[:noise] == trace[:noise]
+    @test new_trace[:xs] == trace[:xs]
+  end
+
+end
+
 @testset "structure metric" begin
 
   config = GP.GPConfig()

@@ -670,10 +670,13 @@ i.i.d. samples of the true function at `ts[i]` plus mean zero
 Gaussian noise.
 """
 function compute_cov_matrix_vectorized(node::Node, noise, ts)
-    # A dense identity, rather than LinearAlgebra.I, keeps the sum an array
-    # that is differentiated as a whole instead of entry by entry.
+    K = eval_cov(node, ts)
+    K isa Matrix{Float64} && return K + (noise * LinearAlgebra.I)
+    # While the kernel parameters are being differentiated, a dense identity
+    # keeps the sum an array that is differentiated as a whole instead of
+    # entry by entry.
     n = length(ts)
-    return eval_cov(node, ts) + noise .* Matrix{Float64}(LinearAlgebra.I, n, n)
+    return K + noise .* Matrix{Float64}(LinearAlgebra.I, n, n)
 end
 
 """
