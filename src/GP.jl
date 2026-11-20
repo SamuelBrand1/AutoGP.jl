@@ -282,9 +282,15 @@ function eval_cov(node::GammaExponential, t1, t2)
     return node.amplitude * c
 end
 
+# (dt / lengthscale)^gamma, with zero rather than NaN derivatives at dt = 0.
+function gamma_power(dt, lengthscale, gamma)
+    power = (dt / lengthscale)^gamma
+    return dt > 0 ? power : zero(power)
+end
+
 function eval_cov(node::GammaExponential, ts::Vector{Float64})
     dt = abs.(ts .- ts')
-    C = exp.(- (dt ./ node.lengthscale) .^ node.gamma)
+    C = exp.(- gamma_power.(dt, node.lengthscale, node.gamma))
     return node.amplitude * C
 end
 
@@ -664,7 +670,13 @@ i.i.d. samples of the true function at `ts[i]` plus mean zero
 Gaussian noise.
 """
 function compute_cov_matrix_vectorized(node::Node, noise, ts)
-    return eval_cov(node, ts) + (noise * LinearAlgebra.I)
+    K = eval_cov(node, ts)
+    K isa Matrix{Float64} && return K + (noise * LinearAlgebra.I)
+    # While the kernel parameters are being differentiated, a dense identity
+    # keeps the sum an array that is differentiated as a whole instead of
+    # entry by entry.
+    n = length(ts)
+    return K + noise .* Matrix{Float64}(LinearAlgebra.I, n, n)
 end
 
 """

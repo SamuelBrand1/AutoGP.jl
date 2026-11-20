@@ -200,10 +200,16 @@ the observed data. Inference is performed using sequential Monte Carlo.
 - `adaptive_rejuvenation::Bool=false`: If `true` rejuvenates only if resampled, else at each step.
 - `hmc_config::Dict`: Configuration for HMC inference on numeric parameters. Allowable keys are:
     - `n_exit::Integer=1`: Number of successive rejections after which HMC loop is terminated.
+      Terminating early saves time, but the number of steps then depends on the samples and the
+      sampler no longer leaves the posterior exactly invariant; `n_exit=n_hmc` never terminates
+      early, and is the default whenever `hmc_config` is given without `n_exit`.
     - `L_param::Integer=10` Number of leapfrog steps for kernel parameters.
     - `L_noise::Integer=10`: Number of leapfrog steps for noise parameter.
     - `eps_param::Float64=0.02`: Step size for kernel parameters.
     - `eps_noise::Float64=0.02`: Step size for noise parameter.
+
+  The leapfrog steps for kernel parameters follow their prior only, and the proposal is accepted
+  on the posterior; noise is moved separately by HMC.
 - `verbose::Bool=false`: Report progress to stdout.
 - `check::Bool=false`: Perform dynamic correctness checks during inference.
 - `config::GP.GPConfig=GP.GPConfig()`: User-specific customization, refer to [`GP.GPConfig`](@ref).

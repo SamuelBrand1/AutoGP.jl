@@ -75,9 +75,13 @@ function get_node_dist(idx::Int, config::GPConfig)
     end
 end
 
-@gen function covariance_prior(idx::Int, config::GPConfig)
+# Address of a choice of `covariance_prior`, under an optional namespace.
+prefixed(::Nothing, address) = address
+prefixed(prefix, address) = prefix => address
+
+@gen function covariance_prior(idx::Int, config::GPConfig, prefix=nothing)
     node_dist = get_node_dist(idx, config)
-    node_type = {(idx, :node_type)} ~ categorical(node_dist)
+    node_type = {prefixed(prefix, (idx, :node_type))} ~ categorical(node_dist)
 
     # LeafNode
     if node_type in [
@@ -90,7 +94,7 @@ end
         NodeType = config.index_to_node[node_type]
         params = []
         for field in fieldnames(NodeType)
-            log_param  = {(idx, field)} ~ normal(0, 1)
+            log_param  = {prefixed(prefix, (idx, field))} ~ normal(0, 1)
             param = transform_param(field, log_param, config)
             push!(params, param)
         end
@@ -101,8 +105,8 @@ end
         idx_l = Gen.get_child(idx, 1, config.max_branch)
         idx_r = Gen.get_child(idx, 2, config.max_branch)
         config = GPConfig(config; changepoints=false)
-        left_node = {*} ~ covariance_prior(idx_l, config)
-        right_node = {*} ~ covariance_prior(idx_r, config)
+        left_node = {*} ~ covariance_prior(idx_l, config, prefix)
+        right_node = {*} ~ covariance_prior(idx_r, config, prefix)
         NodeType = config.index_to_node[node_type]
         node = NodeType(left_node, right_node)
 
@@ -112,12 +116,12 @@ end
         # It is impossible to be here if the assertion is false,
         # but we should allow such traces to have probability zero
         # (for inference) rather than force an assertion error.
-        location = {(idx, :location)} ~ normal(0, 1)
+        location = {prefixed(prefix, (idx, :location))} ~ normal(0, 1)
         param = transform_param(:location, location, config)
         child1 = Gen.get_child(idx, 1, config.max_branch)
         child2 = Gen.get_child(idx, 2, config.max_branch)
-        left_node = {*} ~ covariance_prior(child1, config)
-        right_node = {*} ~ covariance_prior(child2, config)
+        left_node = {*} ~ covariance_prior(child1, config, prefix)
+        right_node = {*} ~ covariance_prior(child2, config, prefix)
         node = ChangePoint(left_node, right_node, param, .001)
 
     else
@@ -129,7 +133,11 @@ end
 
 @gen function model(ts::Vector{Float64}, config::GPConfig)
     n = length(ts)
-    covariance_fn = {:tree} ~ covariance_prior(1, config)
+    # The prior is spliced in with its choices under :tree, rather than called
+    # at :tree, because Gen does not differentiate through the return value
+    # (a Node) of a traced call: the gradient of the likelihood with respect
+    # to the kernel parameters would be dropped.
+    covariance_fn = {*} ~ covariance_prior(1, config, :tree)
     noise ~ normal(0, 1)
     noise = transform_param(:noise, noise, config) + JITTER
     cov_matrix = GP.compute_cov_matrix_vectorized(covariance_fn, noise, ts)

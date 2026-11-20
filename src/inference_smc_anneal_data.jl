@@ -15,6 +15,7 @@
 # included by ./Inference.jl
 
 import Distributions
+import LinearAlgebra
 
 using Printf: @sprintf
 
@@ -28,6 +29,52 @@ end
 function effective_sample_size(state::Gen.ParticleFilterState)
     log_normalized_weights = Gen.normalize_weights(state.log_weights)[2]
     return Gen.effective_sample_size(log_normalized_weights)
+end
+
+# Errors raised when a gradient step reaches parameters at which the
+# covariance matrix cannot be constructed, evaluated or factorized.
+const DivergenceError = Union{
+    LinearAlgebra.PosDefException,DomainError,AssertionError}
+
+# The default move for kernel parameters. The leapfrog trajectory follows the
+# gradient of the normal(0, 1) priors only, which is minus the values, and the
+# proposal is accepted on the full score. This is what `Gen.hmc` did for these
+# parameters while the model kept the likelihood out of their gradient, written
+# without the gradient and update calls that did not affect the result.
+function prior_hmc(
+        trace::Gen.Trace, selection::Gen.Selection; L=10, eps=0.1,
+        check=false, observations=Gen.EmptyChoiceMap())
+    prev_model_score = Gen.get_score(trace)
+    args = Gen.get_args(trace)
+    argdiffs = map((_) -> Gen.NoChange(), args)
+    value_choices = Gen.get_selected(Gen.get_choices(trace), selection)
+    values = Gen.to_array(value_choices, Float64)
+    gradient = -values
+    momenta = Float64[Gen.random(Gen.normal, 0, 1) for _=1:length(values)]
+    prev_momenta_score = 0.
+    for val in momenta
+        prev_momenta_score += Gen.logpdf(Gen.normal, val, 0, 1)
+    end
+    for step=1:L
+        momenta += (eps / 2) * gradient
+        values += eps * momenta
+        gradient = -values
+        momenta += (eps / 2) * gradient
+    end
+    value_choices = Gen.from_array(value_choices, values)
+    (new_trace, _, _) = Gen.update(trace, args, argdiffs, value_choices)
+    check && Gen.check_observations(Gen.get_choices(new_trace), observations)
+    new_model_score = Gen.get_score(new_trace)
+    new_momenta_score = 0.
+    for val in momenta
+        new_momenta_score += Gen.logpdf(Gen.normal, -val, 0, 1)
+    end
+    alpha = new_model_score - prev_model_score + new_momenta_score - prev_momenta_score
+    if log(rand()) < alpha
+        (new_trace, true)
+    else
+        (trace, false)
+    end
 end
 
 function rejuvenate_particle_parameters(
@@ -60,8 +107,14 @@ function rejuvenate_particle_parameters(
     @assert length(leaf_addrs) > 0
     selection = Gen.select(leaf_addrs...)
     for i=1:n_hmc
-        trace, accepted = Gen.hmc(trace, selection;
-            L=L_param, eps=eps_param, check=check, observations=observations)
+        # A trajectory that diverges is rejected.
+        trace, accepted = try
+            prior_hmc(trace, selection;
+                L=L_param, eps=eps_param, check=check, observations=observations)
+        catch err
+            err isa DivergenceError || rethrow()
+            (trace, false)
+        end
         if infer_noise
             trace, = Gen.hmc(trace, Gen.select(:noise);
                 L=L_noise, eps=eps_noise, check=check, observations=observations)
