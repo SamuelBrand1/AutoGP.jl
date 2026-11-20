@@ -82,16 +82,10 @@ prefixed(prefix, address) = prefix => address
 @gen function covariance_prior(idx::Int, config::GPConfig, prefix=nothing)
     node_dist = get_node_dist(idx, config)
     node_type = {prefixed(prefix, (idx, :node_type))} ~ categorical(node_dist)
+    NodeType = config.index_to_node[node_type]
 
-    # LeafNode
-    if node_type in [
-            config.Constant,
-            config.Linear,
-            config.SquaredExponential,
-            config.GammaExponential,
-            config.Periodic,
-            ]
-        NodeType = config.index_to_node[node_type]
+    # LeafNode — any registered LeafNode subtype, not a fixed code list
+    if NodeType <: GP.LeafNode
         params = []
         for field in fieldnames(NodeType)
             log_param  = {prefixed(prefix, (idx, field))} ~ normal(0, 1)
@@ -107,7 +101,6 @@ prefixed(prefix, address) = prefix => address
         config = GPConfig(config; changepoints=false)
         left_node = {*} ~ covariance_prior(idx_l, config, prefix)
         right_node = {*} ~ covariance_prior(idx_r, config, prefix)
-        NodeType = config.index_to_node[node_type]
         node = NodeType(left_node, right_node)
 
     # ChangePoint
@@ -140,8 +133,14 @@ end
     covariance_fn = {*} ~ covariance_prior(1, config, :tree)
     noise ~ normal(0, 1)
     noise = transform_param(:noise, noise, config) + JITTER
-    cov_matrix = GP.compute_cov_matrix_vectorized(covariance_fn, noise, ts)
-    xs ~ mvnormal(zeros(n), cov_matrix)
+    if isnothing(config.observation_model)
+        cov_matrix = GP.compute_cov_matrix_vectorized(covariance_fn, noise, ts)
+        xs ~ mvnormal(zeros(n), cov_matrix)
+    else
+        # Custom observation model receives the noise-free covariance.
+        cov_matrix = GP.eval_cov(covariance_fn, ts)
+        xs ~ config.observation_model(cov_matrix, noise)
+    end
     return covariance_fn
 end
 
