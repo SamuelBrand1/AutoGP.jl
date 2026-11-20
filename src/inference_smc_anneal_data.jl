@@ -15,6 +15,7 @@
 # included by ./Inference.jl
 
 import Distributions
+import LinearAlgebra
 
 using Printf: @sprintf
 
@@ -28,6 +29,87 @@ end
 function effective_sample_size(state::Gen.ParticleFilterState)
     log_normalized_weights = Gen.normalize_weights(state.log_weights)[2]
     return Gen.effective_sample_size(log_normalized_weights)
+end
+
+# Errors raised when a gradient step reaches parameters at which the
+# covariance matrix cannot be constructed, evaluated or factorized.
+const DivergenceError = Union{
+    LinearAlgebra.PosDefException,DomainError,AssertionError}
+
+"""
+    structure_metric(trace, addresses; n_draws=32)
+
+Diagonal metric (mass matrix) for HMC on the numeric choices at `addresses`:
+their prior precision plus the Fisher information of the likelihood, averaged
+over the prior. The squared score of the likelihood is averaged over `n_draws`
+draws of the choices at `addresses` from their prior, each with data simulated
+from the model.
+
+The metric depends on the covariance structure and time points of `trace`,
+but not on the current values at `addresses` or on the observed data, so HMC
+with it leaves the posterior invariant.
+"""
+function structure_metric(trace::Gen.Trace, addresses; n_draws::Integer=32)
+    selection = Gen.select(addresses...)
+    resampled = Gen.select(addresses..., :xs)
+    total = zeros(length(addresses))
+    n = 0
+    for _ in 1:n_draws
+        try
+            (simulated, _) = Gen.regenerate(trace, resampled)
+            (_, values, gradients) = Gen.choice_gradients(simulated, selection)
+            # The choices have normal(0, 1) priors, whose gradient is minus
+            # the value: adding the values leaves the score of the likelihood.
+            score = Gen.to_array(gradients, Float64) .+ Gen.to_array(values, Float64)
+            all(isfinite, score) || continue
+            total .+= score .^ 2
+            n += 1
+        catch err
+            err isa DivergenceError || rethrow()
+        end
+    end
+    return n == 0 ? ones(length(addresses)) : 1 .+ total ./ n
+end
+
+# The default move for kernel parameters. The leapfrog trajectory follows the
+# gradient of the normal(0, 1) priors only, which is minus the values, and the
+# proposal is accepted on the full score. This is what `Gen.hmc` did for these
+# parameters while the model kept the likelihood out of their gradient, written
+# without the gradient and update calls that did not affect the result.
+function prior_hmc(
+        trace::Gen.Trace, selection::Gen.Selection; L=10, eps=0.1,
+        check=false, observations=Gen.EmptyChoiceMap())
+    prev_model_score = Gen.get_score(trace)
+    args = Gen.get_args(trace)
+    argdiffs = map((_) -> Gen.NoChange(), args)
+    value_choices = Gen.get_selected(Gen.get_choices(trace), selection)
+    values = Gen.to_array(value_choices, Float64)
+    gradient = -values
+    momenta = Float64[Gen.random(Gen.normal, 0, 1) for _=1:length(values)]
+    prev_momenta_score = 0.
+    for val in momenta
+        prev_momenta_score += Gen.logpdf(Gen.normal, val, 0, 1)
+    end
+    for step=1:L
+        momenta += (eps / 2) * gradient
+        values += eps * momenta
+        gradient = -values
+        momenta += (eps / 2) * gradient
+    end
+    value_choices = Gen.from_array(value_choices, values)
+    (new_trace, _, _) = Gen.update(trace, args, argdiffs, value_choices)
+    check && Gen.check_observations(Gen.get_choices(new_trace), observations)
+    new_model_score = Gen.get_score(new_trace)
+    new_momenta_score = 0.
+    for val in momenta
+        new_momenta_score += Gen.logpdf(Gen.normal, -val, 0, 1)
+    end
+    alpha = new_model_score - prev_model_score + new_momenta_score - prev_momenta_score
+    if log(rand()) < alpha
+        (new_trace, true)
+    else
+        (trace, false)
+    end
 end
 
 function rejuvenate_particle_parameters(
@@ -48,8 +130,9 @@ function rejuvenate_particle_parameters(
     # Infer noise?
     infer_noise = !Gen.has_value(observations, :noise)
     # HMC configuration.
+    metric_draws = get(hmc_config, :metric_draws, 0)
     L_param   = get(hmc_config, :L_param, 10)
-    eps_param = get(hmc_config, :eps_param, .02)
+    eps_param = get(hmc_config, :eps_param, metric_draws > 0 ? .1 : .02)
     L_noise   = get(hmc_config, :L_noise, 10)
     eps_noise = get(hmc_config, :eps_noise, .02)
     n_exit    = get(hmc_config, :n_exit, n_hmc)
@@ -58,11 +141,35 @@ function rejuvenate_particle_parameters(
     n_reject = 0
     n_trial = 0
     @assert length(leaf_addrs) > 0
+    # With a metric, kernel parameters and noise move jointly by HMC. The
+    # metric is built once: it is the same for every state the moves below can
+    # reach. Without one, kernel parameters move by `prior_hmc`.
+    metric = nothing
+    if metric_draws > 0
+        # Gen up to 0.4.9 leaves the metric out of the leapfrog position step
+        # (Gen.jl issue 572), which lowers acceptance instead of raising it.
+        (pkgversion(Gen) > v"0.4.9" || isdefined(Gen, :value_update)) || error(
+            "hmc_config[:metric_draws] needs a version of Gen after 0.4.9.")
+        infer_noise && push!(leaf_addrs, :noise)
+        metric = structure_metric(trace, leaf_addrs; n_draws=metric_draws)
+    end
     selection = Gen.select(leaf_addrs...)
     for i=1:n_hmc
-        trace, accepted = Gen.hmc(trace, selection;
-            L=L_param, eps=eps_param, check=check, observations=observations)
-        if infer_noise
+        # A trajectory that diverges is rejected.
+        trace, accepted = try
+            if isnothing(metric)
+                prior_hmc(trace, selection;
+                    L=L_param, eps=eps_param, check=check, observations=observations)
+            else
+                Gen.hmc(trace, selection;
+                    L=L_param, eps=eps_param, check=check, observations=observations,
+                    metric=metric)
+            end
+        catch err
+            err isa DivergenceError || rethrow()
+            (trace, false)
+        end
+        if infer_noise && metric_draws == 0
             trace, = Gen.hmc(trace, Gen.select(:noise);
                 L=L_noise, eps=eps_noise, check=check, observations=observations)
         end
