@@ -71,6 +71,47 @@ function structure_metric(trace::Gen.Trace, addresses; n_draws::Integer=32)
     return n == 0 ? ones(length(addresses)) : 1 .+ total ./ n
 end
 
+# The default move for kernel parameters. The leapfrog trajectory follows the
+# gradient of the normal(0, 1) priors only, which is minus the values, and the
+# proposal is accepted on the full score. This is what `Gen.hmc` did for these
+# parameters while the model kept the likelihood out of their gradient, written
+# without the gradient and update calls that did not affect the result.
+function prior_hmc(
+        trace::Gen.Trace, selection::Gen.Selection; L=10, eps=0.1,
+        check=false, observations=Gen.EmptyChoiceMap())
+    prev_model_score = Gen.get_score(trace)
+    args = Gen.get_args(trace)
+    argdiffs = map((_) -> Gen.NoChange(), args)
+    value_choices = Gen.get_selected(Gen.get_choices(trace), selection)
+    values = Gen.to_array(value_choices, Float64)
+    gradient = -values
+    momenta = Float64[Gen.random(Gen.normal, 0, 1) for _=1:length(values)]
+    prev_momenta_score = 0.
+    for val in momenta
+        prev_momenta_score += Gen.logpdf(Gen.normal, val, 0, 1)
+    end
+    for step=1:L
+        momenta += (eps / 2) * gradient
+        values += eps * momenta
+        gradient = -values
+        momenta += (eps / 2) * gradient
+    end
+    value_choices = Gen.from_array(value_choices, values)
+    (new_trace, _, _) = Gen.update(trace, args, argdiffs, value_choices)
+    check && Gen.check_observations(Gen.get_choices(new_trace), observations)
+    new_model_score = Gen.get_score(new_trace)
+    new_momenta_score = 0.
+    for val in momenta
+        new_momenta_score += Gen.logpdf(Gen.normal, -val, 0, 1)
+    end
+    alpha = new_model_score - prev_model_score + new_momenta_score - prev_momenta_score
+    if log(rand()) < alpha
+        (new_trace, true)
+    else
+        (trace, false)
+    end
+end
+
 function rejuvenate_particle_parameters(
         trace::Gen.Trace,
         n_hmc::Integer;
@@ -100,9 +141,10 @@ function rejuvenate_particle_parameters(
     n_reject = 0
     n_trial = 0
     @assert length(leaf_addrs) > 0
-    # With a metric, kernel parameters and noise move jointly. The metric is
-    # built once: it is the same for every state the moves below can reach.
-    hmc_kwargs = (;)
+    # With a metric, kernel parameters and noise move jointly by HMC. The
+    # metric is built once: it is the same for every state the moves below can
+    # reach. Without one, kernel parameters move by `prior_hmc`.
+    metric = nothing
     if metric_draws > 0
         # Gen up to 0.4.9 leaves the metric out of the leapfrog position step
         # (Gen.jl issue 572), which lowers acceptance instead of raising it.
@@ -110,15 +152,19 @@ function rejuvenate_particle_parameters(
             "hmc_config[:metric_draws] needs a version of Gen after 0.4.9.")
         infer_noise && push!(leaf_addrs, :noise)
         metric = structure_metric(trace, leaf_addrs; n_draws=metric_draws)
-        hmc_kwargs = (; metric=metric)
     end
     selection = Gen.select(leaf_addrs...)
     for i=1:n_hmc
         # A trajectory that diverges is rejected.
         trace, accepted = try
-            Gen.hmc(trace, selection;
-                L=L_param, eps=eps_param, check=check, observations=observations,
-                hmc_kwargs...)
+            if isnothing(metric)
+                prior_hmc(trace, selection;
+                    L=L_param, eps=eps_param, check=check, observations=observations)
+            else
+                Gen.hmc(trace, selection;
+                    L=L_param, eps=eps_param, check=check, observations=observations,
+                    metric=metric)
+            end
         catch err
             err isa DivergenceError || rethrow()
             (trace, false)

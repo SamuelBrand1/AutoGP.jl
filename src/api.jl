@@ -199,17 +199,21 @@ the observed data. Inference is performed using sequential Monte Carlo.
 - `adaptive_resampling::Bool=true`: If `true` resamples based on ESS threshold, else at each step.
 - `adaptive_rejuvenation::Bool=false`: If `true` rejuvenates only if resampled, else at each step.
 - `hmc_config::Dict`: Configuration for HMC inference on numeric parameters. Allowable keys are:
-    - `n_exit::Integer=n_hmc`: Number of successive rejections after which HMC loop is terminated.
-      The default never terminates early; a smaller value saves time but the sampler then no
-      longer leaves the posterior invariant, because the number of steps depends on the samples.
+    - `n_exit::Integer=1`: Number of successive rejections after which HMC loop is terminated.
+      Terminating early saves time, but the number of steps then depends on the samples and the
+      sampler no longer leaves the posterior exactly invariant; `n_exit=n_hmc` never terminates
+      early, and is the default whenever `hmc_config` is given without `n_exit`.
     - `L_param::Integer=10` Number of leapfrog steps for kernel parameters.
     - `L_noise::Integer=10`: Number of leapfrog steps for noise parameter.
     - `eps_param::Float64=0.02`: Step size for kernel parameters (default `0.1` with a metric).
     - `eps_noise::Float64=0.02`: Step size for noise parameter.
-    - `metric_draws::Integer=0`: If positive, kernel parameters and noise are moved jointly, using
-      `L_param` and `eps_param`, with a diagonal metric that reflects the typical scale of each
-      parameter for the current covariance structure. The metric is estimated from this many draws
-      from the prior; it does not depend on the current parameter values. Needs Gen after 0.4.9.
+    - `metric_draws::Integer=0`: By default (`0`) the leapfrog steps for kernel parameters follow
+      their prior only, and the proposal is accepted on the posterior; noise is moved separately
+      by HMC. If positive, kernel parameters and noise are moved jointly by HMC on the posterior,
+      using `L_param` and `eps_param`, with a diagonal metric that reflects the typical scale of
+      each parameter for the current covariance structure. The metric is estimated from this many
+      draws from the prior; it does not depend on the current parameter values. Needs Gen after
+      0.4.9.
 - `verbose::Bool=false`: Report progress to stdout.
 - `check::Bool=false`: Perform dynamic correctness checks during inference.
 - `config::GP.GPConfig=GP.GPConfig()`: User-specific customization, refer to [`GP.GPConfig`](@ref).
@@ -224,7 +228,7 @@ function fit_smc!(
         shuffle::Bool=true,
         adaptive_resampling::Bool=true,
         adaptive_rejuvenation::Bool=false,
-        hmc_config=Dict(),
+        hmc_config=(n_exit=1,),
         verbose::Bool=false,
         check::Bool=false,
         callback_fn::Function=(; kwargs...) -> nothing)
@@ -287,7 +291,7 @@ function fit_mcmc!(
         model::GPModel;
         n_mcmc::Integer,
         n_hmc::Integer,
-        hmc_config=Dict(),
+        hmc_config=(n_exit=2,),
         biased::Bool=false,
         verbose::Bool=false,
         check::Bool=false,
@@ -410,7 +414,7 @@ function mcmc_structure!(
         model::GPModel,
         n_mcmc::Integer,
         n_hmc::Integer;
-        hmc_config=Dict(),
+        hmc_config=(n_exit=2,),
         biased::Bool=false,
         verbose::Bool=false,
         check::Bool=false)
